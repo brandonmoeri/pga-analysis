@@ -1,0 +1,31 @@
+course_id,course_name,yardage,par,par_3,par_4,par_5,fairway_width_avg,green_size_avg,rough_severity,hazard_count,elevation_change,slope_rating,course_rating
+TPC Sawgrass,TPC Sawgrass Stadium Course,7245,72,4,10,4,28,6200,4.0,35,25,155,77.5
+Augusta National,Augusta National Golf Club,7510,72,4,10,4,42,6800,2.5,28,180,137,76.2
+Pebble Beach GL,Pebble Beach Golf Links,7051,72,5,9,4,32,5800,3.5,30,150,145,75.5
+TPC Scottsdale,TPC Scottsdale Stadium Course,7261,71,4,11,3,35,7000,2.0,20,15,131,74.5
+Torrey Pines (South),Torrey Pines South Course,7802,72,4,10,4,30,5500,4.5,28,130,143,78.6
+Riviera CC,Riviera Country Club,7322,71,5,9,3,30,5800,3.8,32,120,142,75.0
+Bay Hill Club,Bay Hill Club and Lodge,7466,72,4,10,4,32,6500,3.5,40,50,140,76.8
+Muirfield Village,Muirfield Village Golf Club,7533,72,4,10,4,33,6200,4.0,45,85,145,77.2
+TPC Southwind,TPC Southwind,7244,70,4,12,2,30,5800,3.2,35,30,138,74.5
+Harbour Town GL,Harbour Town Golf Links,7135,71,5,9,3,26,4500,3.0,25,15,144,75.2
+Colonial CC,Colonial Country Club,7209,70,5,11,2,28,5200,3.8,30,40,136,74.8
+Quail Hollow,Quail Hollow Club,7554,71,4,11,3,32,6000,3.5,38,100,147,76.5
+Bethpage Black,Bethpage State Park Black Course,7459,70,4,12,2,28,5000,4.8,45,120,155,78.1
+East Lake GC,East Lake Golf Club,7346,70,4,12,2,30,5500,3.8,35,80,144,75.8
+TPC River Highlands,TPC River Highlands,6841,70,4,12,2,32,5600,3.0,28,40,132,72.5
+Olympia Fields (North),Olympia Fields North Course,7366,70,5,11,2,28,5400,4.2,40,60,148,76.0
+Sedgefield CC,Sedgefield Country Club,7117,70,4,12,2,29,5200,3.5,32,35,140,73.8
+TPC Twin Cities,TPC Twin Cities,7431,72,4,10,4,35,6500,2.8,30,50,136,75.0
+Castle Pines GC,Castle Pines Golf Club,7559,72,4,10,4,34,6200,3.5,35,400,145,76.8
+Silverado Resort (North),Silverado Resort North Course,7166,72,4,10,4,36,6800,2.5,25,100,133,74.2
+Waialae CC,Waialae Country Club,7044,70,4,12,2,34,5200,2.8,30,25,132,73.5
+Sherwood CC,Sherwood Country Club,7073,72,4,10,4,38,7200,2.2,28,150,134,74.0
+Trinity Forest GC,Trinity Forest Golf Club,7379,71,4,11,3,45,7500,2.0,15,20,128,74.5
+TPC San Antonio (Oaks),TPC San Antonio Oaks Course,7435,72,4,10,4,33,6300,3.2,32,80,141,75.8
+PGA National (Champion),PGA National Champion Course,7140,70,4,12,2,30,5500,4.0,55,35,142,75.5
+Congaree GC,Congaree Golf Club,7655,71,5,10,3,40,6800,3.0,25,30,138,76.2
+TPC Craig Ranch,TPC Craig Ranch,7468,72,4,10,4,38,7000,2.5,28,45,135,75.5
+Wilmington CC (South),Wilmington Country Club South Course,7534,71,4,11,3,30,5800,3.8,35,90,143,76.0
+The Country Club,The Country Club at Brookline,7264,71,4,11,3,28,5000,4.2,40,100,148,75.8
+Southern Hills CC,Southern Hills Country Club,7556,71,4,11,3,29,5600,4.5,42,120,150,77.0

@@ -1,0 +1,70 @@
+# .gitignore for PGA Analysis Project
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Data - exclude large/generated files
+data/**/*.csv
+data/**/*.xlsx
+data/**/*.json
+# Keep course characteristics (small, manually curated)
+!data/raw/courses/course_characteristics.csv
+
+# Models
+models/*.pkl
+models/*.joblib
+models/*.h5
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Logs
+*.log
+logs/
+
+# Cache
+.cache/
+.pytest_cache/
+
+# Environment variables
+.env
+.env.local
+
+# Output
+output/
+results/
+figures/
