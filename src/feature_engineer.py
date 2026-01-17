@@ -221,5 +221,139 @@ class FeatureEngineer:
         # Add identifiers for later analysis
         X['player_id'] = merged['player_id']
         X['course_id'] = merged['course_id']
-        
+
         return X, y
+
+    def create_classification_features(
+        self,
+        tournament_df: pd.DataFrame,
+        course_features: pd.DataFrame,
+        rolling_calculator=None
+    ) -> Tuple[pd.DataFrame, dict]:
+        """
+        Create features for tournament outcome prediction (classification).
+
+        Combines:
+        1. Rolling form features (from RollingFormCalculator)
+        2. Course features (from engineer_course_features)
+        3. Player-course interactions adapted for classification
+
+        Args:
+            tournament_df: Tournament-level data with dates and SG metrics
+            course_features: Course characteristics DataFrame
+            rolling_calculator: RollingFormCalculator instance (optional)
+
+        Returns:
+            Tuple of (X features DataFrame, targets dict with made_cut/top_10/win)
+        """
+        df = tournament_df.copy()
+
+        # Step 1: Compute rolling features if calculator provided
+        if rolling_calculator is not None:
+            df = rolling_calculator.compute_all_features(
+                df,
+                player_col='player_id',
+                course_col='course',
+                date_col='date'
+            )
+
+        # Step 2: Engineer course features and merge
+        if not course_features.empty:
+            course_df = self.engineer_course_features(course_features)
+            # Merge on course name
+            df = df.merge(
+                course_df,
+                left_on='course',
+                right_on='course_id',
+                how='left'
+            )
+
+        # Step 3: Create player-course interaction features using rolling stats
+        # Form × Course difficulty interaction
+        if 'sg_total_last_5' in df.columns and 'overall_difficulty' in df.columns:
+            df['form_difficulty_interaction'] = (
+                df['sg_total_last_5'] * df['overall_difficulty']
+            )
+
+        # Course history boost (past success at this course)
+        if 'course_avg_sg' in df.columns and 'course_appearances' in df.columns:
+            df['course_history_boost'] = (
+                df['course_avg_sg'] * np.log1p(df['course_appearances'])
+            )
+
+        # Momentum × difficulty (improving players on hard courses)
+        if 'sg_total_momentum' in df.columns and 'overall_difficulty' in df.columns:
+            df['momentum_difficulty_interaction'] = (
+                df['sg_total_momentum'] * df['overall_difficulty']
+            )
+
+        # Step 4: Define feature columns for classification
+        rolling_features = [
+            # Rolling averages (last 5 tournaments)
+            'sg_total_last_5', 'sg_ott_last_5', 'sg_app_last_5',
+            'sg_arg_last_5', 'sg_putt_last_5',
+            # Rolling averages (last 10 tournaments)
+            'sg_total_last_10', 'sg_ott_last_10', 'sg_app_last_10',
+            'sg_arg_last_10', 'sg_putt_last_10',
+            # Standard deviations (consistency)
+            'sg_total_std_last_10', 'sg_ott_std_last_10', 'sg_app_std_last_10',
+            'sg_arg_std_last_10', 'sg_putt_std_last_10',
+            # Momentum features
+            'sg_total_momentum', 'sg_ott_momentum', 'sg_app_momentum',
+            'sg_arg_momentum', 'sg_putt_momentum',
+        ]
+
+        course_history_features = [
+            'course_avg_sg', 'course_appearances',
+        ]
+
+        course_characteristic_features = [
+            'overall_difficulty', 'is_tight_course', 'is_long_course',
+            'green_challenge', 'hazard_density', 'approach_difficulty',
+            'yardage', 'fairway_width_avg', 'slope_rating',
+        ]
+
+        interaction_features = [
+            'form_difficulty_interaction', 'course_history_boost',
+            'momentum_difficulty_interaction',
+        ]
+
+        # Combine all feature groups
+        all_feature_cols = (
+            rolling_features +
+            course_history_features +
+            course_characteristic_features +
+            interaction_features
+        )
+
+        # Only include columns that exist
+        feature_cols = [col for col in all_feature_cols if col in df.columns]
+
+        # Build feature matrix
+        X = df[feature_cols].copy()
+
+        # Add metadata columns (not used as features, but helpful for analysis)
+        X['player_id'] = df['player_id']
+        X['course'] = df['course']
+        X['date'] = df['date']
+        X['tournament_name'] = df['tournament_name'] if 'tournament_name' in df.columns else df['course']
+
+        # Build targets dictionary
+        targets = {}
+        if 'made_cut' in df.columns:
+            targets['made_cut'] = df['made_cut'].copy()
+        if 'top_10' in df.columns:
+            targets['top_10'] = df['top_10'].copy()
+        if 'top_5' in df.columns:
+            targets['top_5'] = df['top_5'].copy()
+        if 'win' in df.columns:
+            targets['win'] = df['win'].copy()
+
+        print(f"  Classification features created:")
+        print(f"    - Total features: {len(feature_cols)}")
+        print(f"    - Rolling features: {len([c for c in rolling_features if c in df.columns])}")
+        print(f"    - Course features: {len([c for c in course_characteristic_features if c in df.columns])}")
+        print(f"    - Interaction features: {len([c for c in interaction_features if c in df.columns])}")
+        print(f"    - Samples: {len(X)}")
+
+        return X, targets

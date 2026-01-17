@@ -309,6 +309,120 @@ class RealDataLoader:
                 return pd.to_numeric(df['pos'], errors='coerce').fillna(50)
             return 72  # Default to par
 
+    def load_tournament_level_data(
+        self,
+        min_year: int = 2020,
+        max_year: int = 2024
+    ) -> pd.DataFrame:
+        """
+        Load tournament-level data for classification tasks.
+
+        Unlike create_player_stats() which aggregates to season-level,
+        this preserves individual tournament records with:
+        - date (for temporal ordering and rolling features)
+        - made_cut, top_10, win (classification targets)
+        - SG metrics (for rolling feature computation)
+        - player_id, course, tournament_name
+
+        This data format is required for outcome prediction with
+        time-aware rolling features.
+
+        Args:
+            min_year: Minimum season year to include
+            max_year: Maximum season year to include
+
+        Returns:
+            DataFrame with one row per player-tournament, sorted by date
+        """
+        print("\n  Loading tournament-level data for outcome prediction...")
+
+        # Load raw Kaggle data
+        raw_df = self.load_kaggle_data(min_year, max_year)
+
+        # Identify column names
+        player_col = 'Player_initial_last' if 'Player_initial_last' in raw_df.columns else 'player'
+        course_col = 'course' if 'course' in raw_df.columns else 'course_name'
+
+        # Parse date
+        if 'date' in raw_df.columns:
+            raw_df['date'] = pd.to_datetime(raw_df['date'], errors='coerce')
+        else:
+            # Create synthetic dates from season if no date column
+            raw_df['date'] = pd.to_datetime(raw_df['season'].astype(str) + '-06-01')
+
+        # Filter for records with strokes gained data (needed for features)
+        df = raw_df.copy()
+        if 'sg_total' in df.columns:
+            df = df[df['sg_total'].notna()]
+
+        # Create binary classification targets
+        # 1. made_cut - already exists in most datasets
+        if 'made_cut' not in df.columns:
+            # Infer from n_rounds: 4 rounds = made cut
+            if 'n_rounds' in df.columns:
+                df['made_cut'] = (df['n_rounds'] >= 4).astype(int)
+            else:
+                df['made_cut'] = 1  # Assume made cut if no data
+
+        # 2. top_10 - derive from position
+        if 'pos' in df.columns:
+            # Parse position (handles "T5", "CUT", etc.)
+            pos_numeric = pd.to_numeric(
+                df['pos'].astype(str).str.replace('T', '').str.replace('CUT', '999'),
+                errors='coerce'
+            )
+            df['top_10'] = (pos_numeric <= 10).astype(int)
+            df['top_5'] = (pos_numeric <= 5).astype(int)
+            df['win'] = (pos_numeric == 1).astype(int)
+            df['position_numeric'] = pos_numeric
+        else:
+            df['top_10'] = 0
+            df['top_5'] = 0
+            df['win'] = 0
+            df['position_numeric'] = 999
+
+        # Standardize column names
+        result = pd.DataFrame({
+            'player_id': df[player_col],
+            'course': df[course_col],
+            'date': df['date'],
+            'season': df['season'] if 'season' in df.columns else df['date'].dt.year,
+            'tournament_name': df['tournament_name'] if 'tournament_name' in df.columns else df[course_col],
+            # Strokes Gained metrics for rolling features
+            'sg_total': df['sg_total'] if 'sg_total' in df.columns else 0,
+            'sg_ott': df['sg_ott'] if 'sg_ott' in df.columns else 0,
+            'sg_app': df['sg_app'] if 'sg_app' in df.columns else 0,
+            'sg_arg': df['sg_arg'] if 'sg_arg' in df.columns else 0,
+            'sg_putt': df['sg_putt'] if 'sg_putt' in df.columns else 0,
+            # Classification targets
+            'made_cut': df['made_cut'],
+            'top_10': df['top_10'],
+            'top_5': df['top_5'],
+            'win': df['win'],
+            'position': df['position_numeric'],
+        })
+
+        # Sort by player and date for proper rolling calculations
+        result = result.sort_values(['player_id', 'date']).reset_index(drop=True)
+
+        # Print summary
+        n_players = result['player_id'].nunique()
+        n_tournaments = result['tournament_name'].nunique()
+        cut_rate = result['made_cut'].mean() * 100
+        top10_rate = result['top_10'].mean() * 100
+        win_rate = result['win'].mean() * 100
+
+        print(f"  Tournament-Level Data Summary:")
+        print(f"    - Records: {len(result)}")
+        print(f"    - Players: {n_players}")
+        print(f"    - Tournaments: {n_tournaments}")
+        print(f"    - Date range: {result['date'].min().date()} to {result['date'].max().date()}")
+        print(f"    - Made cut rate: {cut_rate:.1f}%")
+        print(f"    - Top-10 rate: {top10_rate:.1f}%")
+        print(f"    - Win rate: {win_rate:.2f}%")
+
+        return result
+
     def load_data(
         self,
         min_year: int = 2020,
