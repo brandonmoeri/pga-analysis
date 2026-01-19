@@ -92,6 +92,7 @@ pga-analysis/
 │   ├── model.py                       # XGBoost/LightGBM regression
 │   ├── outcome_predictor.py           # Classification with calibration (NEW)
 │   ├── rolling_features.py            # Time-aware rolling features (NEW)
+│   ├── pga_scraper.py                 # PGA Tour/ESPN stats scraper (NEW)
 │   ├── explainer.py                   # SHAP interpretability
 │   ├── ranker.py                      # Player ranking engine
 │   └── pipeline.py                    # Training pipelines
@@ -140,8 +141,8 @@ py -3.11 predict_outcomes.py --predict --player "Scheffler" --course "Augusta"
 # Predict Rory McIlroy at TPC Sawgrass
 py -3.11 predict_outcomes.py --predict --player "Rory" --course "Sawgrass"
 
-# Any partial name match works
-py -3.11 predict_outcomes.py --predict --player "DJ" --course "Torrey"
+# Force refresh current stats from PGA Tour/ESPN before predicting
+py -3.11 predict_outcomes.py --predict --player "DJ" --course "Torrey" --update-data
 ```
 
 ### 3. Course Fit Rankings
@@ -246,7 +247,7 @@ This project demonstrates several key ML concepts:
 ## Data Sources
 
 - **Training Data**: Kaggle PGA Tour 2015-2022 (strokes gained, tournament results)
-- **Current Stats**: ESPN Golf scraper for real-time player statistics
+- **Current Stats**: PGA Tour API with ESPN fallback for current season statistics
 - **Course Data**: Curated course characteristics (yardage, fairway width, etc.)
 
 ## Dependencies

@@ -275,58 +275,286 @@ class PGATourScraper:
         """
         Alternative scraping method using ESPN or other sources.
         Fallback if PGA Tour API is unavailable.
+
+        Fetches data from multiple ESPN endpoints and merges them.
         """
         print("  Trying ESPN Golf stats...")
 
-        try:
-            # ESPN golf stats page with actual performance stats
-            url = "https://www.espn.com/golf/stats/player/_/stat/strokes-gained-total"
-            response = self.session.get(url, timeout=30)
+        all_data = {}
 
-            if response.status_code == 200:
+        # ESPN stat endpoints to try
+        stat_endpoints = [
+            ('https://www.espn.com/golf/stats/player/_/stat/strokes-gained-total', 'SG:TOT', 'sg_total'),
+            ('https://www.espn.com/golf/stats/player/_/stat/strokes-gained-tee-to-green', 'SG:T2G', 'sg_t2g'),
+            ('https://www.espn.com/golf/stats/player/_/stat/strokes-gained-putting', 'SG:P', 'sg_putt'),
+            ('https://www.espn.com/golf/stats/player', None, None),  # General stats page
+        ]
+
+        for url, stat_col, target_col in stat_endpoints:
+            try:
+                response = self.session.get(url, timeout=30)
+                if response.status_code != 200:
+                    continue
+
                 tables = pd.read_html(response.text)
                 if len(tables) >= 2:
                     # ESPN splits data into two tables: names and stats
-                    names_df = tables[0]  # Contains RK, Name
-                    stats_df = tables[1]  # Contains the stats columns
-
-                    # Merge them side by side
+                    names_df = tables[0]
+                    stats_df = tables[1]
                     df = pd.concat([names_df, stats_df], axis=1)
 
-                    # Map ESPN columns to our expected format
-                    espn_column_map = {
-                        'Name': 'player_id',
-                        'DDIS': 'driving_distance',
-                        'DACC': 'driving_accuracy',
-                        'GIR': 'greens_in_regulation',
-                        'SAND': 'scrambling',
-                        'PUTTS': 'putting_average',
-                        'SCORE': 'scoring_average',
-                    }
+                    # Get player name column
+                    name_col = 'Name' if 'Name' in df.columns else df.columns[1]
 
-                    df = df.rename(columns=espn_column_map)
+                    # Process each player
+                    for _, row in df.iterrows():
+                        player_name = row[name_col]
+                        if pd.isna(player_name) or not isinstance(player_name, str):
+                            continue
 
-                    # Convert percentage columns (remove % if present)
-                    for col in ['driving_accuracy', 'greens_in_regulation', 'scrambling']:
-                        if col in df.columns:
-                            df[col] = pd.to_numeric(df[col].astype(str).str.replace('%', ''), errors='coerce')
+                        if player_name not in all_data:
+                            all_data[player_name] = {'player_id': player_name}
 
-                    # Convert numeric columns
-                    for col in ['driving_distance', 'putting_average', 'scoring_average']:
-                        if col in df.columns:
-                            df[col] = pd.to_numeric(df[col], errors='coerce')
+                        # Extract specific SG stat if this is a SG page
+                        if stat_col and target_col:
+                            # Find the SG column (usually named with the stat)
+                            for col in df.columns:
+                                if 'AVG' in str(col).upper() or stat_col in str(col).upper():
+                                    try:
+                                        val = float(str(row[col]).replace('+', '').replace(',', ''))
+                                        all_data[player_name][target_col] = val
+                                    except (ValueError, TypeError):
+                                        pass
+                                    break
 
-                    print(f"  Retrieved {len(df)} players from ESPN")
-                    print(f"  Columns: {list(df.columns)}")
-                    return df
-                elif tables:
-                    df = tables[0]
-                    print(f"  Retrieved {len(df)} players from ESPN (basic)")
-                    return df
+                        # Extract general stats from any page
+                        col_map = {
+                            'DDIS': 'driving_distance',
+                            'DACC': 'driving_accuracy',
+                            'GIR': 'greens_in_regulation',
+                            'SAND': 'scrambling',
+                            'PUTTS': 'putting_average',
+                            'SCORE': 'scoring_average',
+                            'BIRDS': 'birdies_per_round',
+                            'EVNTS': 'events',
+                            'RNDS': 'rounds',
+                            'CUTS': 'cuts_made',
+                            'TOP10': 'top_10s',
+                            'WINS': 'wins',
+                        }
+
+                        for espn_col, our_col in col_map.items():
+                            if espn_col in df.columns and our_col not in all_data[player_name]:
+                                try:
+                                    val = row[espn_col]
+                                    if pd.notna(val):
+                                        val_str = str(val).replace('%', '').replace(',', '')
+                                        all_data[player_name][our_col] = float(val_str)
+                                except (ValueError, TypeError):
+                                    pass
+
+                    if stat_col:
+                        print(f"    Fetched {stat_col} data...")
+
+            except Exception as e:
+                print(f"    Failed to fetch {url}: {e}")
+                continue
+
+            time.sleep(0.5)  # Rate limiting
+
+        if not all_data:
+            print("  No ESPN data retrieved")
+            return pd.DataFrame()
+
+        df = pd.DataFrame(list(all_data.values()))
+
+        # Estimate missing SG components if we have some data
+        if 'sg_total' in df.columns and 'sg_t2g' in df.columns:
+            # SG:Total = SG:T2G + SG:Putting
+            if 'sg_putt' not in df.columns:
+                df['sg_putt'] = df['sg_total'] - df['sg_t2g']
+
+        # Estimate SG components from traditional stats if SG not available
+        if 'sg_total' not in df.columns:
+            # Rough estimate: good stats = positive SG
+            if 'scoring_average' in df.columns:
+                tour_avg = df['scoring_average'].median()
+                df['sg_total'] = (tour_avg - df['scoring_average']) / 1.5
+            else:
+                df['sg_total'] = 0
+
+        print(f"  Retrieved {len(df)} players from ESPN")
+        print(f"  Columns: {list(df.columns)}")
+
+        return df
+
+
+    def scrape_player_tournament_history(self, player_name: str) -> pd.DataFrame:
+        """
+        Scrape a player's recent tournament history from ESPN.
+
+        Args:
+            player_name: Player name to search for
+
+        Returns:
+            DataFrame with tournament results including date, course, position, etc.
+        """
+        print(f"\n  Fetching tournament history for {player_name}...")
+
+        # First, search for the player to get their ESPN ID
+        search_url = f"https://www.espn.com/golf/player/results/_/name/{player_name.lower().replace(' ', '-')}"
+
+        try:
+            response = self.session.get(search_url, timeout=30)
+            if response.status_code != 200:
+                # Try alternative search
+                search_url = f"https://site.web.api.espn.com/apis/common/v3/search?query={player_name}&limit=5&type=player&sport=golf"
+                response = self.session.get(search_url, timeout=30)
+
+            # Try to parse tournament results from player page
+            tables = pd.read_html(response.text)
+            if tables:
+                # Find the results table
+                for table in tables:
+                    if 'DATE' in table.columns or 'TOURNAMENT' in table.columns or len(table.columns) > 5:
+                        return self._parse_tournament_results(table, player_name)
+
         except Exception as e:
-            print(f"  ESPN scraping failed: {e}")
+            print(f"    Could not fetch player history: {e}")
 
         return pd.DataFrame()
+
+    def _parse_tournament_results(self, df: pd.DataFrame, player_name: str) -> pd.DataFrame:
+        """Parse tournament results table from ESPN."""
+        results = []
+
+        # Map common column names
+        col_map = {
+            'DATE': 'date',
+            'TOURNAMENT': 'tournament_name',
+            'POS': 'position',
+            'SCORE': 'score',
+            'R1': 'round_1',
+            'R2': 'round_2',
+            'R3': 'round_3',
+            'R4': 'round_4',
+            'EARNINGS': 'earnings',
+        }
+
+        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+
+        for _, row in df.iterrows():
+            result = {'player_id': player_name}
+
+            for col in ['date', 'tournament_name', 'position', 'score']:
+                if col in row.index and pd.notna(row[col]):
+                    result[col] = row[col]
+
+            if 'tournament_name' in result:
+                results.append(result)
+
+        return pd.DataFrame(results)
+
+    def scrape_masters_results(self, years: List[int] = None) -> pd.DataFrame:
+        """
+        Scrape Masters Tournament results for specified years.
+
+        Args:
+            years: List of years to scrape (default: 2023-2025)
+
+        Returns:
+            DataFrame with Masters results
+        """
+        if years is None:
+            years = [2023, 2024, 2025]
+
+        print(f"\n  Scraping Masters results for {years}...")
+
+        all_results = []
+
+        for year in years:
+            try:
+                # ESPN Masters leaderboard URL pattern
+                url = f"https://www.espn.com/golf/leaderboard/_/tournamentId/401580/{year}"
+
+                response = self.session.get(url, timeout=30)
+                if response.status_code != 200:
+                    # Try alternative URL patterns
+                    alt_urls = [
+                        f"https://www.espn.com/golf/leaderboard?tournamentId=401580&season={year}",
+                        f"https://www.espn.com/golf/story/_/id/masters-{year}-leaderboard",
+                    ]
+                    for alt_url in alt_urls:
+                        response = self.session.get(alt_url, timeout=30)
+                        if response.status_code == 200:
+                            break
+
+                tables = pd.read_html(response.text)
+
+                for table in tables:
+                    if len(table) > 10:  # Likely the leaderboard
+                        table['year'] = year
+                        table['tournament_name'] = 'Masters Tournament'
+                        table['course'] = 'Augusta National Golf Club - Augusta, GA'
+                        all_results.append(table)
+                        print(f"    {year}: Found {len(table)} players")
+                        break
+
+            except Exception as e:
+                print(f"    {year}: Failed - {e}")
+
+            time.sleep(1)  # Rate limiting
+
+        if all_results:
+            combined = pd.concat(all_results, ignore_index=True)
+            return self._standardize_tournament_results(combined)
+
+        return pd.DataFrame()
+
+    def _standardize_tournament_results(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Standardize tournament results to match our data format."""
+        # Common column mappings
+        col_map = {
+            'POS': 'position',
+            'PLAYER': 'player_id',
+            'Player': 'player_id',
+            'Name': 'player_id',
+            'TO PAR': 'score_to_par',
+            'SCORE': 'total_score',
+            'TOT': 'total_score',
+            'THRU': 'thru',
+            'R1': 'round_1',
+            'R2': 'round_2',
+            'R3': 'round_3',
+            'R4': 'round_4',
+        }
+
+        df = df.rename(columns={k: v for k, v in col_map.items() if k in df.columns})
+
+        # Parse position (handle "T5", "CUT", etc.)
+        if 'position' in df.columns:
+            df['position_numeric'] = pd.to_numeric(
+                df['position'].astype(str).str.replace('T', '').str.replace('CUT', '999').str.replace('WD', '999'),
+                errors='coerce'
+            )
+            df['made_cut'] = (df['position_numeric'] < 999).astype(int)
+            df['top_10'] = (df['position_numeric'] <= 10).astype(int)
+            df['win'] = (df['position_numeric'] == 1).astype(int)
+
+        return df
+
+    def load_recent_tournament_data(self) -> pd.DataFrame:
+        """Load any cached recent tournament data."""
+        recent_file = self.raw_dir / "recent_tournament_results.csv"
+        if recent_file.exists():
+            return pd.read_csv(recent_file)
+        return pd.DataFrame()
+
+    def save_recent_tournament_data(self, df: pd.DataFrame):
+        """Save recent tournament data to cache."""
+        recent_file = self.raw_dir / "recent_tournament_results.csv"
+        df.to_csv(recent_file, index=False)
+        print(f"  Saved recent tournament data to {recent_file}")
 
 
 def update_data():

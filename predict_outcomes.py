@@ -7,23 +7,25 @@ Predicts tournament outcomes probabilistically:
 - Top-10 finish
 - Win probability
 
-Uses rolling form features with strict leakage prevention and
-calibrated probability outputs.
+Uses CURRENT season ESPN data for player form estimation and
+calibrated probability outputs from trained models.
 
 Usage:
     py -3.11 predict_outcomes.py --train
-    py -3.11 predict_outcomes.py --train --model logistic
-    py -3.11 predict_outcomes.py --evaluate
-    py -3.11 predict_outcomes.py --predict --tournament "The Memorial"
+    py -3.11 predict_outcomes.py --predict --player "Scheffler" --course "Augusta"
+    py -3.11 predict_outcomes.py --predict --player "Rory" --course "TPC" --update-data
 
 Examples:
-    # Train models on 2015-2022 data
+    # Train models on 2015-2022 historical data
     py -3.11 predict_outcomes.py --train
 
-    # Train with logistic regression baseline
-    py -3.11 predict_outcomes.py --train --model logistic
+    # Predict player outcomes using current ESPN data
+    py -3.11 predict_outcomes.py --predict --player "Scheffler" --course "Augusta"
 
-    # Evaluate saved models
+    # Force refresh of ESPN data before predicting
+    py -3.11 predict_outcomes.py --predict --player "Rory" --course "Sawgrass" --update-data
+
+    # Evaluate saved models on historical data
     py -3.11 predict_outcomes.py --evaluate
 """
 
@@ -39,6 +41,9 @@ from src.outcome_predictor import OutcomePredictor, OutcomeEvaluator
 from src.data_loader import RealDataLoader
 from src.rolling_features import RollingFormCalculator
 from src.feature_engineer import FeatureEngineer
+from src.pga_scraper import PGATourScraper
+import pandas as pd
+import numpy as np
 
 
 def train_models(args):
@@ -148,10 +153,58 @@ def evaluate_models(args):
     evaluator.print_evaluation_summary(eval_results)
 
 
+def fetch_current_player_stats(player_name: str, force_update: bool = False) -> pd.DataFrame:
+    """
+    Fetch current season stats from ESPN for a player.
+
+    Returns DataFrame with current SG stats that can be used as
+    proxies for rolling form features.
+
+    Args:
+        player_name: Player name to search for
+        force_update: If True, force refresh from ESPN even if cached data exists
+    """
+    print(f"\n  Fetching current ESPN data...")
+    scraper = PGATourScraper()
+
+    # Force update if requested
+    if force_update:
+        print("  Refreshing data from ESPN...")
+        current_stats = scraper.update_player_stats()
+    else:
+        # Try to load cached data first, then scrape if needed
+        current_stats = scraper.load_latest_scraped_data()
+
+        if current_stats.empty:
+            print("  No cached data found, scraping from ESPN...")
+            current_stats = scraper.update_player_stats()
+
+    if current_stats.empty:
+        print("  Warning: Could not fetch current stats from ESPN")
+        return pd.DataFrame()
+
+    # Find matching player (fuzzy match on name)
+    if 'player_id' not in current_stats.columns:
+        # Try to find the name column
+        name_cols = [c for c in current_stats.columns if 'name' in c.lower() or 'player' in c.lower()]
+        if name_cols:
+            current_stats = current_stats.rename(columns={name_cols[0]: 'player_id'})
+        else:
+            print("  Warning: No player name column found in ESPN data")
+            return pd.DataFrame()
+
+    # Fuzzy match player name
+    matching = current_stats[
+        current_stats['player_id'].str.lower().str.contains(player_name.lower(), na=False)
+    ]
+
+    return matching
+
+
 def predict_player_course(args):
-    """Predict outcomes for a specific player at a specific course."""
+    """Predict outcomes for a specific player at a specific course using CURRENT ESPN data."""
     print("\n" + "=" * 70)
-    print("PLAYER-COURSE OUTCOME PREDICTION")
+    print("PLAYER-COURSE OUTCOME PREDICTION (CURRENT SEASON)")
     print("=" * 70)
 
     player_name = args.player
@@ -171,114 +224,211 @@ def predict_player_course(args):
         print("\nNo models found. Run --train first.")
         return
 
-    # Load data to get player's recent form
-    print(f"\n  Loading player data...")
-    loader = RealDataLoader()
+    # Fetch CURRENT stats from ESPN
+    force_update = getattr(args, 'update_data', False)
+    espn_stats = fetch_current_player_stats(player_name, force_update=force_update)
 
-    # Load most recent data available
-    tournament_df = loader.load_tournament_level_data(
-        min_year=args.data_year - 2,
-        max_year=args.data_year
-    )
+    if espn_stats.empty:
+        print(f"\n  Player '{player_name}' not found in current ESPN data.")
+        print("  Try updating ESPN data with: py -3.11 src/pga_scraper.py")
+        return
+
+    if len(espn_stats) > 1:
+        print(f"\n  Multiple matches found:")
+        for _, row in espn_stats.iterrows():
+            print(f"    - {row['player_id']}")
+        player_row = espn_stats.iloc[0]
+        print(f"  Using: {player_row['player_id']}")
+    else:
+        player_row = espn_stats.iloc[0]
+
+    player_id = player_row['player_id']
+    print(f"\n  Player: {player_id}")
+    print(f"  Course: {course_name}")
+
+    # Display current season stats from ESPN
+    print(f"\n  Current Season Stats (ESPN):")
+    stat_display = {
+        'sg_total': 'SG: Total',
+        'sg_ott': 'SG: Off-the-Tee',
+        'sg_app': 'SG: Approach',
+        'sg_arg': 'SG: Around Green',
+        'sg_putt': 'SG: Putting',
+        'driving_distance': 'Driving Distance',
+        'driving_accuracy': 'Driving Accuracy',
+        'greens_in_regulation': 'GIR %',
+        'scrambling': 'Scrambling %',
+    }
+    for col, label in stat_display.items():
+        if col in player_row.index and pd.notna(player_row[col]):
+            val = player_row[col]
+            if 'sg_' in col:
+                print(f"    {label}: {val:+.2f}")
+            elif 'accuracy' in col or 'regulation' in col or 'scrambling' in col:
+                print(f"    {label}: {val:.1f}%")
+            else:
+                print(f"    {label}: {val:.1f}")
+
+    # Build feature vector using current ESPN stats
+    # Map ESPN season averages to rolling feature proxies
+    latest_form = pd.DataFrame(index=[0])
+
+    # Use current season SG as proxy for rolling averages
+    # (assumes current season average is a good estimate of recent form)
+    sg_total = player_row.get('sg_total', 0) if pd.notna(player_row.get('sg_total')) else 0
+    sg_ott = player_row.get('sg_ott', player_row.get('off_the_tee', 0)) if pd.notna(player_row.get('sg_ott', player_row.get('off_the_tee'))) else 0
+    sg_app = player_row.get('sg_app', player_row.get('approach_play', 0)) if pd.notna(player_row.get('sg_app', player_row.get('approach_play'))) else 0
+    sg_arg = player_row.get('sg_arg', player_row.get('short_game', 0)) if pd.notna(player_row.get('sg_arg', player_row.get('short_game'))) else 0
+    sg_putt = player_row.get('sg_putt', 0) if pd.notna(player_row.get('sg_putt')) else 0
+
+    # Rolling features - use current season stats as proxy
+    latest_form['sg_total_last_5'] = sg_total
+    latest_form['sg_total_last_10'] = sg_total
+    latest_form['sg_ott_last_5'] = sg_ott
+    latest_form['sg_ott_last_10'] = sg_ott
+    latest_form['sg_app_last_5'] = sg_app
+    latest_form['sg_app_last_10'] = sg_app
+    latest_form['sg_arg_last_5'] = sg_arg
+    latest_form['sg_arg_last_10'] = sg_arg
+    latest_form['sg_putt_last_5'] = sg_putt
+    latest_form['sg_putt_last_10'] = sg_putt
+
+    # Standard deviations (assume moderate consistency for current data)
+    latest_form['sg_total_std_last_10'] = 1.5
+    latest_form['sg_ott_std_last_10'] = 0.5
+    latest_form['sg_app_std_last_10'] = 0.5
+    latest_form['sg_arg_std_last_10'] = 0.3
+    latest_form['sg_putt_std_last_10'] = 0.3
+
+    # Momentum (assume neutral for season averages)
+    latest_form['sg_total_momentum'] = 0
+    latest_form['sg_ott_momentum'] = 0
+    latest_form['sg_app_momentum'] = 0
+    latest_form['sg_arg_momentum'] = 0
+    latest_form['sg_putt_momentum'] = 0
+
+    # Course history - check historical data if available
+    loader = RealDataLoader()
     course_features = loader.load_course_characteristics()
 
-    # Find matching player (fuzzy match)
-    all_players = tournament_df['player_id'].unique()
-    matching_players = [p for p in all_players if player_name.lower() in p.lower()]
+    # Try to get historical course performance from Kaggle data + recent ESPN data
+    course_history_list = []
+    try:
+        # Load Kaggle historical data (2015-2022)
+        tournament_df = loader.load_tournament_level_data(min_year=2015, max_year=2022)
+        # Find player in historical data (fuzzy match)
+        hist_players = tournament_df['player_id'].unique()
+        matching_hist = [p for p in hist_players if player_name.lower() in p.lower()]
 
-    if not matching_players:
-        print(f"\n  Player '{player_name}' not found in data.")
-        print(f"  Available players (sample): {list(all_players[:20])}")
-        return
+        if matching_hist:
+            hist_player_id = matching_hist[0]
+            hist_courses = tournament_df['course'].unique()
+            matching_courses = [c for c in hist_courses if course_name.lower() in c.lower()]
 
-    if len(matching_players) > 1:
-        print(f"\n  Multiple matches found: {matching_players}")
-        player_id = matching_players[0]
-        print(f"  Using: {player_id}")
-    else:
-        player_id = matching_players[0]
-
-    # Find matching course (fuzzy match)
-    all_courses = tournament_df['course'].unique()
-    matching_courses = [c for c in all_courses if course_name.lower() in c.lower()]
-
-    if not matching_courses:
-        print(f"\n  Course '{course_name}' not found in tournament data.")
-        print(f"  Available courses (sample): {list(all_courses[:20])}")
-        # Try to use course from characteristics
-        if not course_features.empty and 'course_id' in course_features.columns:
-            char_courses = course_features['course_id'].unique()
-            matching_courses = [c for c in char_courses if course_name.lower() in c.lower()]
             if matching_courses:
                 course_id = matching_courses[0]
-                print(f"  Found in course characteristics: {course_id}")
-            else:
-                return
+                course_history = tournament_df[
+                    (tournament_df['player_id'] == hist_player_id) &
+                    (tournament_df['course'] == course_id)
+                ]
+
+                if len(course_history) > 0:
+                    for _, row in course_history.iterrows():
+                        course_history_list.append({
+                            'date': row['date'],
+                            'sg_total': row['sg_total'],
+                            'made_cut': row['made_cut'],
+                            'position': row['position'],
+                            'source': 'Kaggle'
+                        })
+
+        # Try to get recent tournament history from cached data (2023+)
+        scraper = PGATourScraper()
+        recent_data = scraper.load_recent_tournament_data()
+
+        # Check for recent results at this course
+        if not recent_data.empty and 'player_id' in recent_data.columns:
+            # Filter for matching course
+            course_match = recent_data[
+                recent_data['course'].str.lower().str.contains(course_name.lower(), na=False) |
+                recent_data['tournament_name'].str.lower().str.contains(course_name.lower(), na=False)
+            ]
+
+            # Find player in recent data
+            if not course_match.empty:
+                player_recent = course_match[
+                    course_match['player_id'].str.lower().str.contains(player_name.lower(), na=False)
+                ]
+                if len(player_recent) > 0:
+                    for _, row in player_recent.iterrows():
+                        year = int(row.get('year', 2024))
+                        pos = row.get('position_numeric', 999)
+                        if pd.isna(pos):
+                            pos = 999
+                        pos = int(pos)
+                        made_cut = int(row.get('made_cut', 1 if pos < 100 else 0))
+                        sg_est = row.get('sg_total_est', 0)
+                        if pd.isna(sg_est):
+                            # Estimate SG from position
+                            if pos == 1:
+                                sg_est = 3.5
+                            elif pos <= 5:
+                                sg_est = 2.5
+                            elif pos <= 10:
+                                sg_est = 1.5
+                            elif pos <= 25:
+                                sg_est = 0.5
+                            elif made_cut:
+                                sg_est = 0.0
+                            else:
+                                sg_est = -1.0
+
+                        course_history_list.append({
+                            'date': pd.Timestamp(f'{year}-04-14'),  # Masters typically mid-April
+                            'sg_total': float(sg_est),
+                            'made_cut': made_cut,
+                            'position': pos,
+                            'source': 'Recent'
+                        })
+
+        # Display combined course history
+        if course_history_list:
+            # Sort by date
+            course_history_list.sort(key=lambda x: x['date'], reverse=True)
+            print(f"\n  Course History at {course_name}:")
+            for entry in course_history_list:
+                result = "Made Cut" if entry['made_cut'] == 1 else "Missed Cut"
+                pos = f"Pos: {int(entry['position'])}" if entry['position'] < 999 else ""
+                sg_str = f"SG: {entry['sg_total']:+.2f}" if entry['source'] == 'Kaggle' else f"Est SG: {entry['sg_total']:+.1f}"
+                date_str = entry['date'].date() if hasattr(entry['date'], 'date') else entry['date']
+                source_tag = f"[{entry['source']}]"
+                print(f"    {date_str}: {sg_str} {result} {pos} {source_tag}")
+
+            # Calculate averages from history
+            sg_values = [e['sg_total'] for e in course_history_list]
+            latest_form['course_avg_sg'] = sum(sg_values) / len(sg_values)
+            latest_form['course_appearances'] = len(course_history_list)
         else:
-            return
-    else:
-        course_id = matching_courses[0]
+            latest_form['course_avg_sg'] = sg_total
+            latest_form['course_appearances'] = 0
 
-    print(f"\n  Player: {player_id}")
-    print(f"  Course: {course_id}")
-
-    # Get player's recent tournaments
-    player_data = tournament_df[tournament_df['player_id'] == player_id].copy()
-    player_data = player_data.sort_values('date', ascending=False)
-
-    if len(player_data) == 0:
-        print(f"\n  No tournament data found for {player_id}")
-        return
-
-    print(f"\n  Player's Recent Form (last 5 tournaments):")
-    recent = player_data.head(5)
-    for _, row in recent.iterrows():
-        result = "Made Cut" if row['made_cut'] == 1 else "Missed Cut"
-        top10 = " (Top 10)" if row['top_10'] == 1 else ""
-        win = " (WIN!)" if row['win'] == 1 else ""
-        print(f"    {row['date'].date()}: {row['tournament_name'][:30]:30s} SG: {row['sg_total']:+.2f} {result}{top10}{win}")
-
-    # Compute rolling features for this player
-    rolling_calc = RollingFormCalculator(windows=[5, 10])
-    player_with_rolling = rolling_calc.compute_all_features(
-        player_data,
-        player_col='player_id',
-        course_col='course',
-        date_col='date'
-    )
-
-    # Get most recent row (current form)
-    latest_form = player_with_rolling.iloc[-1:].copy()
-
-    # Check if player has history at this course
-    course_history = player_data[player_data['course'] == course_id]
-    if len(course_history) > 0:
-        print(f"\n  Player's History at {course_id}:")
-        for _, row in course_history.iterrows():
-            result = "Made Cut" if row['made_cut'] == 1 else "Missed Cut"
-            pos = f"Pos: {int(row['position'])}" if row['position'] < 999 else ""
-            print(f"    {row['date'].date()}: SG: {row['sg_total']:+.2f} {result} {pos}")
-
-        # Compute course-specific averages
-        latest_form['course_avg_sg'] = course_history['sg_total'].mean()
-        latest_form['course_appearances'] = len(course_history)
-    else:
-        print(f"\n  No history at {course_id} - using player average")
-        latest_form['course_avg_sg'] = player_data['sg_total'].mean()
+    except Exception as e:
+        print(f"  Note: Could not load historical data: {e}")
+        latest_form['course_avg_sg'] = sg_total
         latest_form['course_appearances'] = 0
 
     # Merge course features
     engineer = FeatureEngineer()
     if not course_features.empty:
         course_df = engineer.engineer_course_features(course_features)
-        course_row = course_df[course_df['course_id'].str.lower().str.contains(course_name.lower())]
+        course_row = course_df[course_df['course_id'].str.lower().str.contains(course_name.lower(), na=False)]
         if len(course_row) > 0:
+            print(f"\n  Course: {course_row['course_id'].values[0]}")
             for col in course_row.columns:
                 if col != 'course_id':
                     latest_form[col] = course_row[col].values[0]
         else:
-            # Use defaults
-            print(f"  Course characteristics not found - using tour averages")
+            print(f"\n  Course characteristics not found for '{course_name}' - using tour averages")
             latest_form['overall_difficulty'] = 0.5
             latest_form['is_tight_course'] = 0
             latest_form['is_long_course'] = 0
@@ -288,6 +438,16 @@ def predict_player_course(args):
             latest_form['yardage'] = 7200
             latest_form['fairway_width_avg'] = 32
             latest_form['slope_rating'] = 140
+    else:
+        latest_form['overall_difficulty'] = 0.5
+        latest_form['is_tight_course'] = 0
+        latest_form['is_long_course'] = 0
+        latest_form['green_challenge'] = 0.5
+        latest_form['hazard_density'] = 0.3
+        latest_form['approach_difficulty'] = 0.5
+        latest_form['yardage'] = 7200
+        latest_form['fairway_width_avg'] = 32
+        latest_form['slope_rating'] = 140
 
     # Create interaction features
     if 'sg_total_last_5' in latest_form.columns and 'overall_difficulty' in latest_form.columns:
@@ -295,7 +455,6 @@ def predict_player_course(args):
             latest_form['sg_total_last_5'] * latest_form['overall_difficulty']
         )
     if 'course_avg_sg' in latest_form.columns and 'course_appearances' in latest_form.columns:
-        import numpy as np
         latest_form['course_history_boost'] = (
             latest_form['course_avg_sg'] * np.log1p(latest_form['course_appearances'])
         )
@@ -308,22 +467,18 @@ def predict_player_course(args):
     feature_cols = predictors[list(predictors.keys())[0]].feature_names
 
     # Build feature vector
-    X_pred = latest_form[feature_cols].copy() if all(c in latest_form.columns for c in feature_cols) else None
-
-    if X_pred is None:
-        # Build manually with available features
-        X_pred = pd.DataFrame(index=[0])
-        for col in feature_cols:
-            if col in latest_form.columns:
-                X_pred[col] = latest_form[col].values[0]
-            else:
-                X_pred[col] = 0
+    X_pred = pd.DataFrame(index=[0])
+    for col in feature_cols:
+        if col in latest_form.columns:
+            X_pred[col] = latest_form[col].values[0]
+        else:
+            X_pred[col] = 0
 
     X_pred = X_pred.fillna(0)
 
     # Make predictions
     print("\n" + "=" * 70)
-    print(f"PREDICTED PROBABILITIES: {player_id} at {course_id}")
+    print(f"PREDICTED PROBABILITIES: {player_id}")
     print("=" * 70)
 
     for outcome, predictor in predictors.items():
@@ -335,18 +490,15 @@ def predict_player_course(args):
     # Context
     print("\n" + "-" * 70)
     print("CONTEXT:")
-    if 'sg_total_last_5' in latest_form.columns:
-        sg5 = latest_form['sg_total_last_5'].values[0]
-        print(f"  Recent Form (Last 5 SG Avg): {sg5:+.2f}")
-    if 'sg_total_last_10' in latest_form.columns:
-        sg10 = latest_form['sg_total_last_10'].values[0]
-        print(f"  Longer Form (Last 10 SG Avg): {sg10:+.2f}")
+    print(f"  Current Season SG Total: {sg_total:+.2f}")
     if 'course_appearances' in latest_form.columns:
         apps = int(latest_form['course_appearances'].values[0])
-        print(f"  Course Appearances: {apps}")
-    if 'course_avg_sg' in latest_form.columns:
+        print(f"  Course Appearances (historical): {apps}")
+    if 'course_avg_sg' in latest_form.columns and apps > 0:
         csg = latest_form['course_avg_sg'].values[0]
         print(f"  Course History SG Avg: {csg:+.2f}")
+
+    print("\n  Note: Using current season ESPN stats for form estimation")
 
     return predictors
 
@@ -442,10 +594,9 @@ Examples:
         help="Course name (partial match, e.g., 'Augusta')"
     )
     parser.add_argument(
-        "--data-year",
-        type=int,
-        default=2022,
-        help="Year of data to use for player form (default: 2022)"
+        "--update-data",
+        action="store_true",
+        help="Force refresh of ESPN data before predicting"
     )
 
     args = parser.parse_args()
