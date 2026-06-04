@@ -12,6 +12,7 @@ from datetime import datetime
 
 from backend.app.config import settings
 from backend.app.utils.model_loader import ModelCache
+from backend.app.routers import predictions, rankings, explanations, data
 
 # Configure logging
 logging.basicConfig(level=settings.log_level)
@@ -137,15 +138,13 @@ async def general_exception_handler(request, exc):
 
 
 # ============================================================================
-# Route Registration (Phase 4)
+# Route Registration 
 # ============================================================================
 
-# Placeholder for routers to be imported and registered
-# from app.routers import predictions, rankings, explanations, data
-# app.include_router(predictions.router, prefix="/api")
-# app.include_router(rankings.router, prefix="/api")
-# app.include_router(explanations.router, prefix="/api")
-# app.include_router(data.router, prefix="/api")
+app.include_router(predictions.router, prefix="/api")
+app.include_router(rankings.router, prefix="/api")
+app.include_router(explanations.router, prefix="/api")
+app.include_router(data.router, prefix="/api")
 
 
 if __name__ == "__main__":
