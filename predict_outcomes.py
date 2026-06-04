@@ -36,12 +36,12 @@ from pathlib import Path
 # Add project root to path
 sys.path.insert(0, str(Path(__file__).parent))
 
-from src.pipeline import run_outcome_prediction_pipeline
-from src.outcome_predictor import OutcomePredictor, OutcomeEvaluator
-from src.data_loader import RealDataLoader
-from src.rolling_features import RollingFormCalculator
-from src.feature_engineer import FeatureEngineer
-from src.pga_scraper import PGATourScraper
+from backend.app.services.src.pipeline import run_outcome_prediction_pipeline
+from backend.app.services.src.outcome_predictor import OutcomePredictor, OutcomeEvaluator
+from backend.app.services.src.data_loader import RealDataLoader
+from backend.app.services.src.rolling_features import RollingFormCalculator
+from backend.app.services.src.feature_engineer import FeatureEngineer
+from backend.app.services.src.pga_scraper import PGATourScraper
 import pandas as pd
 import numpy as np
 
@@ -314,31 +314,54 @@ def predict_player_course(args):
     # Try to get historical course performance from Kaggle data + recent ESPN data
     course_history_list = []
     try:
-        # Load Kaggle historical data (2015-2022)
-        tournament_df = loader.load_tournament_level_data(min_year=2015, max_year=2022)
+        # Load RAW Kaggle data (not filtered by sg_total) to count ALL appearances
+        raw_kaggle = loader.load_kaggle_data(min_year=2015, max_year=2022)
+        player_col = 'Player_initial_last' if 'Player_initial_last' in raw_kaggle.columns else 'player'
+
         # Find player in historical data (fuzzy match)
-        hist_players = tournament_df['player_id'].unique()
+        hist_players = raw_kaggle[player_col].unique()
         matching_hist = [p for p in hist_players if player_name.lower() in p.lower()]
 
         if matching_hist:
             hist_player_id = matching_hist[0]
-            hist_courses = tournament_df['course'].unique()
+            hist_courses = raw_kaggle['course'].unique()
             matching_courses = [c for c in hist_courses if course_name.lower() in c.lower()]
 
             if matching_courses:
                 course_id = matching_courses[0]
-                course_history = tournament_df[
-                    (tournament_df['player_id'] == hist_player_id) &
-                    (tournament_df['course'] == course_id)
+                course_history = raw_kaggle[
+                    (raw_kaggle[player_col] == hist_player_id) &
+                    (raw_kaggle['course'] == course_id)
                 ]
 
                 if len(course_history) > 0:
                     for _, row in course_history.iterrows():
+                        # Use sg_total if available, otherwise estimate from strokes
+                        sg_val = row.get('sg_total', np.nan)
+                        if pd.isna(sg_val):
+                            # Estimate SG per round from total strokes vs par
+                            hole_par = row.get('hole_par', np.nan)
+                            strokes = row.get('strokes', np.nan)
+                            n_rounds = row.get('n_rounds', 4)
+                            if pd.notna(hole_par) and pd.notna(strokes) and n_rounds > 0:
+                                sg_val = (hole_par - strokes) / n_rounds
+                            else:
+                                sg_val = 0.0
+
+                        # For Kaggle data, no per-round split available
+                        # Use the same SG value for both early and full
+                        n_rounds = row.get('n_rounds', 4)
+                        made_cut = int(row.get('made_cut', 1))
+                        pos = row.get('pos', 999)
+
                         course_history_list.append({
-                            'date': row['date'],
-                            'sg_total': row['sg_total'],
-                            'made_cut': row['made_cut'],
-                            'position': row['position'],
+                            'date': pd.to_datetime(row['date']),
+                            'sg_total': float(sg_val),
+                            'sg_r1r2': float(sg_val),  # Best estimate without per-round data
+                            'sg_full': float(sg_val),
+                            'made_cut': made_cut,
+                            'position': pos,
+                            'n_rounds': int(n_rounds),
                             'source': 'Kaggle'
                         })
 
@@ -367,27 +390,55 @@ def predict_player_course(args):
                             pos = 999
                         pos = int(pos)
                         made_cut = int(row.get('made_cut', 1 if pos < 100 else 0))
+                        par = row.get('par', 72)
+                        if pd.isna(par):
+                            par = 72
+                        par = int(par)
+
+                        # Calculate per-round SG from R1-R4 scores
+                        # Each round score is strokes for 18 holes, so SG = par - score
+                        r1 = row.get('r1', np.nan)
+                        r2 = row.get('r2', np.nan)
+                        r3 = row.get('r3', np.nan)
+                        r4 = row.get('r4', np.nan)
+
+                        sg_r1r2 = np.nan
+                        sg_full = np.nan
+
+                        # R1+R2 SG (for made_cut) - average SG per round for first 2 days
+                        early_rounds = [r for r in [r1, r2] if pd.notna(r)]
+                        if early_rounds:
+                            sg_r1r2 = sum(par - r for r in early_rounds) / len(early_rounds)
+
+                        # Full tournament SG (for top_10/win) - average SG per round all days
+                        all_rounds = [r for r in [r1, r2, r3, r4] if pd.notna(r)]
+                        if all_rounds:
+                            sg_full = sum(par - r for r in all_rounds) / len(all_rounds)
+
+                        # Fallback to sg_total_est if no round data
                         sg_est = row.get('sg_total_est', 0)
                         if pd.isna(sg_est):
-                            # Estimate SG from position
-                            if pos == 1:
-                                sg_est = 3.5
-                            elif pos <= 5:
-                                sg_est = 2.5
-                            elif pos <= 10:
-                                sg_est = 1.5
-                            elif pos <= 25:
-                                sg_est = 0.5
-                            elif made_cut:
-                                sg_est = 0.0
-                            else:
-                                sg_est = -1.0
+                            sg_est = 0.0
+
+                        if pd.isna(sg_r1r2):
+                            sg_r1r2 = float(sg_est)
+                        if pd.isna(sg_full):
+                            sg_full = float(sg_est)
+
+                        n_rounds = len(all_rounds) if all_rounds else (4 if made_cut else 2)
 
                         course_history_list.append({
-                            'date': pd.Timestamp(f'{year}-04-14'),  # Masters typically mid-April
-                            'sg_total': float(sg_est),
+                            'date': pd.Timestamp(f'{year}-04-14'),
+                            'sg_total': float(sg_full),
+                            'sg_r1r2': float(sg_r1r2),
+                            'sg_full': float(sg_full),
                             'made_cut': made_cut,
                             'position': pos,
+                            'n_rounds': n_rounds,
+                            'r1': r1 if pd.notna(r1) else None,
+                            'r2': r2 if pd.notna(r2) else None,
+                            'r3': r3 if pd.notna(r3) else None,
+                            'r4': r4 if pd.notna(r4) else None,
                             'source': 'Recent'
                         })
 
@@ -398,23 +449,50 @@ def predict_player_course(args):
             print(f"\n  Course History at {course_name}:")
             for entry in course_history_list:
                 result = "Made Cut" if entry['made_cut'] == 1 else "Missed Cut"
-                pos = f"Pos: {int(entry['position'])}" if entry['position'] < 999 else ""
-                sg_str = f"SG: {entry['sg_total']:+.2f}" if entry['source'] == 'Kaggle' else f"Est SG: {entry['sg_total']:+.1f}"
+                pos_val = entry['position']
+                try:
+                    pos_val = int(float(str(pos_val).replace('T', '')))
+                except (ValueError, TypeError):
+                    pos_val = 999
+                pos = f"Pos: {pos_val}" if pos_val < 999 else ""
                 date_str = entry['date'].date() if hasattr(entry['date'], 'date') else entry['date']
                 source_tag = f"[{entry['source']}]"
-                print(f"    {date_str}: {sg_str} {result} {pos} {source_tag}")
 
-            # Calculate averages from history
-            sg_values = [e['sg_total'] for e in course_history_list]
-            latest_form['course_avg_sg'] = sum(sg_values) / len(sg_values)
+                # Show round scores if available
+                rounds_str = ""
+                if entry.get('r1') is not None:
+                    rounds = [entry.get(f'r{i}') for i in range(1, 5)]
+                    rounds_str = " (" + "-".join(str(int(r)) if r is not None else "--" for r in rounds) + ")"
+
+                sg_r1r2_str = f"SG R1-R2: {entry['sg_r1r2']:+.2f}"
+                sg_full_str = f"SG Full: {entry['sg_full']:+.2f}"
+
+                print(f"    {date_str}: {sg_r1r2_str} | {sg_full_str} {result} {pos}{rounds_str} {source_tag}")
+
+            # Calculate separate averages for cut vs top10/win
+            sg_r1r2_values = [e['sg_r1r2'] for e in course_history_list]
+            sg_full_values = [e['sg_full'] for e in course_history_list]
+
+            course_avg_sg_early = sum(sg_r1r2_values) / len(sg_r1r2_values)
+            course_avg_sg_full = sum(sg_full_values) / len(sg_full_values)
+
+            latest_form['course_avg_sg'] = course_avg_sg_full  # Default
+            latest_form['course_avg_sg_early'] = course_avg_sg_early
+            latest_form['course_avg_sg_full'] = course_avg_sg_full
             latest_form['course_appearances'] = len(course_history_list)
         else:
             latest_form['course_avg_sg'] = sg_total
+            latest_form['course_avg_sg_early'] = sg_total
+            latest_form['course_avg_sg_full'] = sg_total
             latest_form['course_appearances'] = 0
 
     except Exception as e:
         print(f"  Note: Could not load historical data: {e}")
+        import traceback
+        traceback.print_exc()
         latest_form['course_avg_sg'] = sg_total
+        latest_form['course_avg_sg_early'] = sg_total
+        latest_form['course_avg_sg_full'] = sg_total
         latest_form['course_appearances'] = 0
 
     # Merge course features
@@ -466,15 +544,32 @@ def predict_player_course(args):
     # Get feature columns from saved model
     feature_cols = predictors[list(predictors.keys())[0]].feature_names
 
-    # Build feature vector
-    X_pred = pd.DataFrame(index=[0])
-    for col in feature_cols:
-        if col in latest_form.columns:
-            X_pred[col] = latest_form[col].values[0]
-        else:
-            X_pred[col] = 0
+    # Build per-outcome feature vectors with appropriate SG
+    def build_feature_vector(form_df, outcome_type):
+        """Build feature vector using outcome-appropriate course SG."""
+        form_copy = form_df.copy()
 
-    X_pred = X_pred.fillna(0)
+        # Use R1-R2 SG for made_cut, full SG for top_10/win
+        if outcome_type == 'made_cut':
+            if 'course_avg_sg_early' in form_copy.columns:
+                form_copy['course_avg_sg'] = form_copy['course_avg_sg_early']
+        else:
+            if 'course_avg_sg_full' in form_copy.columns:
+                form_copy['course_avg_sg'] = form_copy['course_avg_sg_full']
+
+        # Recompute interaction features with the updated course_avg_sg
+        if 'course_avg_sg' in form_copy.columns and 'course_appearances' in form_copy.columns:
+            form_copy['course_history_boost'] = (
+                form_copy['course_avg_sg'] * np.log1p(form_copy['course_appearances'])
+            )
+
+        X = pd.DataFrame(index=[0])
+        for col in feature_cols:
+            if col in form_copy.columns:
+                X[col] = form_copy[col].values[0]
+            else:
+                X[col] = 0
+        return X.fillna(0)
 
     # Make predictions
     print("\n" + "=" * 70)
@@ -482,10 +577,20 @@ def predict_player_course(args):
     print("=" * 70)
 
     for outcome, predictor in predictors.items():
+        X_pred = build_feature_vector(latest_form, outcome)
         prob = predictor.predict_proba(X_pred)[0]
         bar_len = int(prob * 40)
         bar = "#" * bar_len + "-" * (40 - bar_len)
-        print(f"\n  {outcome.upper():12s}: {prob*100:5.1f}%  [{bar}]")
+
+        # Show which SG was used
+        if outcome == 'made_cut':
+            sg_used = latest_form['course_avg_sg_early'].values[0] if 'course_avg_sg_early' in latest_form.columns else 0
+            sg_label = "R1-R2"
+        else:
+            sg_used = latest_form['course_avg_sg_full'].values[0] if 'course_avg_sg_full' in latest_form.columns else 0
+            sg_label = "R1-R4"
+
+        print(f"\n  {outcome.upper():12s}: {prob*100:5.1f}%  [{bar}]  (Course SG {sg_label}: {sg_used:+.2f})")
 
     # Context
     print("\n" + "-" * 70)
@@ -494,11 +599,14 @@ def predict_player_course(args):
     if 'course_appearances' in latest_form.columns:
         apps = int(latest_form['course_appearances'].values[0])
         print(f"  Course Appearances (historical): {apps}")
-    if 'course_avg_sg' in latest_form.columns and apps > 0:
-        csg = latest_form['course_avg_sg'].values[0]
-        print(f"  Course History SG Avg: {csg:+.2f}")
+    if 'course_avg_sg_early' in latest_form.columns and apps > 0:
+        csg_early = latest_form['course_avg_sg_early'].values[0]
+        csg_full = latest_form['course_avg_sg_full'].values[0]
+        print(f"  Course Avg SG (R1-R2 for cut): {csg_early:+.2f}")
+        print(f"  Course Avg SG (R1-R4 for top10/win): {csg_full:+.2f}")
 
     print("\n  Note: Using current season ESPN stats for form estimation")
+    print("  Made Cut uses R1-R2 strokes gained; Top 10/Win uses all 4 rounds")
 
     return predictors
 

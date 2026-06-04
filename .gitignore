@@ -27,6 +27,15 @@ venv/
 ENV/
 env/
 .venv
+backend/.venv/
+backend/venv/
+
+# Node.js / Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+frontend/.env.*.local
 
 # IDE
 .vscode/

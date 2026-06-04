@@ -6,11 +6,11 @@ Run this to train models, visualize results, and generate insights.
 import sys
 sys.path.insert(0, '.')
 
-from src.data_loader import DataLoader
-from src.feature_engineer import FeatureEngineer
-from src.model import CourseFitModel
-from src.explainer import ShapExplainer
-from src.ranker import CourseFitRanker
+from backend.app.services.src.data_loader import DataLoader
+from backend.app.services.src.feature_engineer import FeatureEngineer
+from backend.app.services.src.model import CourseFitModel
+from backend.app.services.src.explainer import ShapExplainer
+from backend.app.services.src.ranker import CourseFitRanker
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt

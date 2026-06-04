@@ -14,11 +14,11 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from src.pga_scraper import PGATourScraper
-from src.data_loader import DataLoader, RealDataLoader
-from src.feature_engineer import FeatureEngineer
-from src.model import CourseFitModel
-from src.ranker import CourseFitRanker
+from backend.app.services.src.pga_scraper import PGATourScraper
+from backend.app.services.src.data_loader import DataLoader, RealDataLoader
+from backend.app.services.src.feature_engineer import FeatureEngineer
+from backend.app.services.src.model import CourseFitModel
+from backend.app.services.src.ranker import CourseFitRanker
 import pandas as pd
 from pathlib import Path
 

@@ -11,7 +11,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 if __name__ == "__main__":
-    from src.pipeline import run_course_fit_pipeline
+    from backend.app.services.src.pipeline import run_course_fit_pipeline
     
     print("\n" + "=" * 70)
     print("PGA COURSE FIT MODEL - Quick Start")
