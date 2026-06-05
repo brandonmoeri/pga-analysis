@@ -6,6 +6,38 @@ from pydantic import BaseModel, Field
 from typing import Optional, List, Dict, Any
 from datetime import datetime
 
+# WenSocket Models
+
+class RankingUpdate(BaseModel):
+    """Single ranking update message."""
+    rank: int
+    player_id: str
+    fit_score: float
+    confidence: float
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+class RankingStreamMessage(BaseModel):
+    """Message sent over WebSocket during streaming."""
+    type: str = Field(..., description="Message type: 'update', 'progress', 'complete', 'error'")
+    data: Optional[Dict[str, Any]] = None
+    batch_number: int = 0
+    total_batches: Optional[int] = None
+    course_id: Optional[str] = None
+    tournament_name: Optional[str] = None
+    progress_percent: Optional[int] = None
+    message: Optional[str] = None
+
+class PredictionUpdate(BaseModel):
+    """Single prediction update message."""
+    player_id: str
+    course_id: str
+    fit_score: Optional[float]
+    make_cut_prob: float
+    top_10_prob: float
+    win_prob: float
+    confidence: float
+    timestamp: datetime = Field(default_factory=datetime.now)
+
 # Prediction Models
 
 class PredictionRequest(BaseModel):
@@ -55,7 +87,6 @@ class RankingRequest(BaseModel):
                 "top_n": 100
             }
         }
-
 
 class PlayerRanking(BaseModel):
     """Single player ranking result."""

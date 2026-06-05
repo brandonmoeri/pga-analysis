@@ -13,6 +13,7 @@ from datetime import datetime
 from backend.app.config import settings
 from backend.app.utils.model_loader import ModelCache
 from backend.app.routers import predictions, rankings, explanations, data
+from backend.app.websockets import router as ws_router
 
 # Configure logging
 logging.basicConfig(level=settings.log_level)
@@ -145,7 +146,7 @@ app.include_router(predictions.router, prefix="/api")
 app.include_router(rankings.router, prefix="/api")
 app.include_router(explanations.router, prefix="/api")
 app.include_router(data.router, prefix="/api")
-
+app.include_router(ws_router, prefix="")
 
 if __name__ == "__main__":
     import uvicorn
