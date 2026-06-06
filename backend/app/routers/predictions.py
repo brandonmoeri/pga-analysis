@@ -9,10 +9,11 @@ from typing import Optional
 from datetime import datetime
 import logging
 
-from backend.app.models import PredictionRequest, PredictionResponse, OutcomeProbabilities
+from backend.app.models import PredictionRequest, PredictionResponse, OutcomeProbabilities, CourseHistory
 from backend.app.services.outcomes import OutcomeService
 from backend.app.services.course_fit import CourseFitService
 from backend.app.services.data import DataService
+from backend.app.services.features import FeatureService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/predictions", tags=["predictions"])
@@ -48,7 +49,16 @@ async def predict_player_outcome(request: PredictionRequest):
                 status_code=500,
                 detail="Could not generate prediction"
             )
-        
+
+        # Get course history features
+        features = FeatureService.create_player_course_features(request.player_id, request.course_id)
+        course_history = None
+        if features:
+            course_history = CourseHistory(
+                sg_avg=features["course_avg_sg"],
+                appearances=features["rounds_at_course"],
+            )
+
         return PredictionResponse(
             player_id=request.player_id,
             course_id=request.course_id,
@@ -71,6 +81,7 @@ async def predict_player_outcome(request: PredictionRequest):
                     "value": 0.12
                 },
             ],
+            course_history=course_history,
             timestamp=datetime.now()
         )
     except HTTPException:

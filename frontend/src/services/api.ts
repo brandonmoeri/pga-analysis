@@ -21,6 +21,11 @@ export interface OutcomeProbabilities {
   win: number
 }
 
+export interface CourseHistory {
+  sg_avg: number
+  appearances: number
+}
+
 export interface PredictionResponse {
   player_id: string
   course_id: string
@@ -28,6 +33,7 @@ export interface PredictionResponse {
   outcome_probabilities: OutcomeProbabilities
   confidence: number
   top_features: Array<{ feature: string; importance: number }>
+  course_history?: CourseHistory
 }
 
 export interface RankingRequest {

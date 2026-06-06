@@ -59,6 +59,11 @@ class OutcomeProbabilities(BaseModel):
     top_10: float = Field(..., ge=0, le=1, description="Probability of finishing top 10")
     win: float = Field(..., ge=0, le=1, description="Probability of winning")
 
+class CourseHistory(BaseModel):
+    """Player's historical stats at a specific course."""
+    sg_avg: float = Field(..., description="Average strokes gained at this course")
+    appearances: int = Field(..., description="Number of tournament appearances at this course")
+
 class PredictionResponse(BaseModel):
     """Response with prediction results and explanations."""
     player_id: str
@@ -67,6 +72,7 @@ class PredictionResponse(BaseModel):
     outcome_probabilities: OutcomeProbabilities
     confidence: float = Field(..., ge=0, le=1, description="Model confidence score")
     top_features: List[Dict[str, Any]] = Field(default_factory=list, description="Top contributing features")
+    course_history: Optional[CourseHistory] = Field(None, description="Player's historical stats at this course")
     timestamp: datetime = Field(default_factory=datetime.now)
 
 # Ranking Models
