@@ -70,35 +70,10 @@ async def get_player_stats(player_id: str):
 async def get_courses():
     """Get list of available courses."""
     try:
-        courses_info = DataService.get_course_features_dict()
+        courses = DataService.get_courses_list()
         return {
-            "total_courses": courses_info["count"],
-            "courses": [
-                {
-                    "id": "augusta_national",
-                    "name": "Augusta National",
-                    "par": 72,
-                    "yards": 7155
-                },
-                {
-                    "id": "pebble_beach",
-                    "name": "Pebble Beach",
-                    "par": 72,
-                    "yards": 6737
-                },
-                {
-                    "id": "tpc_sawgrass",
-                    "name": "TPC Sawgrass",
-                    "par": 72,
-                    "yards": 7245
-                },
-                {
-                    "id": "quail_hollow",
-                    "name": "Quail Hollow",
-                    "par": 71,
-                    "yards": 7352
-                },
-            ]
+            "total_courses": len(courses),
+            "courses": courses,
         }
     except Exception as e:
         logger.error(f"Error getting courses: {e}")

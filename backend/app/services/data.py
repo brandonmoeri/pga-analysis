@@ -92,3 +92,38 @@ class DataService:
                 "courses": df['course_id'].unique().tolist() if 'course_id' in df.columns else [],
             }
         return {"count": 0, "columns": [], "courses": []}
+
+    @classmethod
+    def player_exists(cls, player_id: str) -> bool:
+        """Check if a player_id exists in the player stats data."""
+        df = cls.load_player_stats()
+        if df is None:
+            return True  # fail open: can't validate without data
+        return player_id in df["player_id"].values
+
+    @classmethod
+    def course_exists(cls, course_id: str) -> bool:
+        """Check if a course_id exists in the course features data."""
+        df = cls.load_course_features()
+        if df is None:
+            return True
+        return course_id in df["course_id"].values
+
+    @classmethod
+    def get_courses_list(cls) -> list:
+        """Return all courses as a list of dicts for the API."""
+        df = cls.load_course_features()
+        if df is None:
+            return []
+        courses = []
+        for _, row in df.iterrows():
+            course: Dict = {
+                "id": str(row["course_id"]),
+                "name": str(row.get("course_name", row["course_id"])),
+            }
+            if "par" in df.columns and pd.notna(row["par"]):
+                course["par"] = int(row["par"])
+            if "yardage" in df.columns and pd.notna(row["yardage"]):
+                course["yards"] = int(row["yardage"])
+            courses.append(course)
+        return courses

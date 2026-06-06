@@ -12,6 +12,7 @@ import logging
 from backend.app.models import PredictionRequest, PredictionResponse, OutcomeProbabilities
 from backend.app.services.outcomes import OutcomeService
 from backend.app.services.course_fit import CourseFitService
+from backend.app.services.data import DataService
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/predictions", tags=["predictions"])
@@ -25,6 +26,11 @@ router = APIRouter(prefix="/predictions", tags=["predictions"])
 async def predict_player_outcome(request: PredictionRequest):
     """Predict tournament outcomes for a plyer at a specific course."""
     try:
+        if not DataService.player_exists(request.player_id):
+            raise HTTPException(status_code=404, detail=f"Player '{request.player_id}' not found")
+        if not DataService.course_exists(request.course_id):
+            raise HTTPException(status_code=404, detail=f"Course '{request.course_id}' not found")
+
         # Get course fit score
         fit_result = CourseFitService.predict_player_course_fit(
             request.player_id,
@@ -67,6 +73,8 @@ async def predict_player_outcome(request: PredictionRequest):
             ],
             timestamp=datetime.now()
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error in predict_player_outcome: {e}")
         raise HTTPException(status_code=500, detail=str(e))
