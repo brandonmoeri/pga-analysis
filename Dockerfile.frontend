@@ -1,0 +1,28 @@
+FROM node:18-alpine as builder
+
+WORKDIR /app
+
+# Copy package files
+COPY frontend/package.json frontend/package-lock.json* ./
+
+# Install
+RUN npm cli
+
+# Copy source
+COPY frontend/ .
+
+# Build
+RUN npm run build
+
+# Production stage with nginx
+FROM nginx:alpine
+
+# Copy built app
+COPY --from=builder /app/dist /usr/share/nginx/html
+
+# Copy nginx config
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+EXPOSE 3000
+
+CMD ["nginx", "-g", "daemon off;"]
