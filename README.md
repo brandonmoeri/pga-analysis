@@ -1,272 +1,141 @@
-# PGA Course Fit & Tournament Outcome Prediction
+# PGA Course Fit Analysis
 
-A full-stack machine learning application for predicting player-course compatibility and tournament outcomes in professional golf.
+Does a golfer's game suit a particular course, once you account for how well they are playing right now? This project tests that question on PGA Tour strokes-gained data from 2015 to 2022, and includes a FastAPI + React app built to serve the results.
 
-## Project Overview
+**The short answer:** recent form does most of the work. Course information may add a little, but one season of holdout data can't confirm it.
 
-This project combines **two predictive models** served through a REST API and interactive web dashboard:
+> **Project status:** the analysis runs end to end on real data. The app is an interface prototype: its API, dashboard and CLI are not connected to a trained model yet. See [App status](#app-status).
 
-1. **Course Fit Model** - Regression model predicting which golfers are best suited for specific courses
-2. **Tournament Outcome Predictor** - Classification model predicting probabilities of making the cut, top-10 finishes, and wins
+## Findings
 
-### Key ML Techniques Demonstrated
+The analysis lives in [notebooks/course_fit_analysis.py](notebooks/course_fit_analysis.py). It predicts `sg_total`, a player's strokes gained per round relative to the field, for 25 courses with curated data. Models train on 2015-2021 (13,196 player-events) and are scored on the 2022 season (1,798 player-events across 15 events).
 
-- **Gradient Boosting** with XGBoost/LightGBM
-- **Probability Calibration** (Platt scaling, isotonic regression)
-- **Rolling Form Features** with strict label leakage prevention
-- **Time-Aware Train/Test Splits** for temporal data
-- **SHAP Explainability** for model interpretation
-- **Feature Engineering** for sports analytics
+| Model | RMSE | MAE | R² | Within-event rank corr. |
+|-------|------|-----|----|-------------------------|
+| Baseline (training mean) | 1.860 | 1.450 | 0.000 | n/a |
+| XGBoost: form only | 1.773 | 1.384 | 0.091 | 0.314 |
+| XGBoost: form + course history | 1.769 | 1.381 | 0.094 | 0.324 |
+| XGBoost: all features | 1.758 | 1.377 | 0.106 | 0.331 |
+| LightGBM: all features | 1.760 | 1.379 | 0.104 | 0.334 |
 
-## Quick Start
+- **Form is the main signal.** It improves RMSE by 0.087 over the baseline and accounts for 61% of the SHAP attribution. `sg_total_last_10` is the strongest single feature.
+- **The course effect is small and unproven.** Adding course features improves RMSE by another 0.015, but the 95% event-level bootstrap interval is -0.002 to 0.031, which includes zero.
+- **Low R² is expected.** A single tournament is mostly noise, so the within-event rank correlation is the more useful measure: about 0.33 between predicted and actual results.
 
-### Option 1: Docker (recommended)
+The course results are also limited by the data: 25 courses, 15 test events, and hand-curated course attributes.
+
+## Method
+
+- **No label leakage:** rolling features apply `shift(1)` before the window, so an event never contributes to its own features.
+- **Time-based validation:** the test set is a full later season, not a random sample of rows.
+- **Features:** 10-event rolling strokes gained by category, 5-event form and momentum, prior results at the course, course attributes (length, fairway width, green size, rough, hazards, elevation, slope), and skill × course interactions.
+- **Course fit metric:** a player's prediction at a course minus their own average across all courses, which separates fit from overall ability.
+- **Interpretation:** SHAP values for global importance, grouped by feature family.
+
+## Running the analysis
+
+Requires Python 3.11+.
+
+1. Download the [PGA Tour Golf Data 2015-2022](https://www.kaggle.com/datasets/robikscube/pga-tour-golf-data-20152022) dataset from Kaggle.
+2. Save `ASA All PGA Raw Data - Tourn Level.csv` in `data/raw/kaggle/`.
+3. Install dependencies and run the notebook:
 
 ```bash
-docker compose up
+pip install -r requirements.txt
+python notebooks/course_fit_analysis.py
 ```
 
-- Frontend: http://localhost:3000
-- Backend API: http://localhost:8000
-- API docs: http://localhost:8000/docs
+In VS Code you can also run it cell by cell using the `# %%` markers.
 
-### Option 2: Local development
+## Running the app
+
+The API reads `data/processed/*.csv` and `models/*.pkl`. Neither is committed, and the pipeline that generated them is no longer in the repo (it was last present in commit `2678e88~1`), so a fresh clone will have empty data endpoints.
 
 ```bash
-# Backend
+# Backend: http://localhost:8000 (interactive docs at /docs)
 pip install -r requirements.txt
 uvicorn backend.app.main:app --reload
 
-# Frontend (separate terminal)
+# Frontend, in a second terminal
 cd frontend
 npm install
 npm run dev
 ```
 
-### Option 3: CLI
+`docker compose up` is also configured, serving the frontend on port 3000 and the API on port 8000. The compose file does not mount `models/`.
+
+IDs use the dataset's formats: players look like `A. Ancer`, and courses look like `Muirfield Village Golf Club - Dublin, OH`.
+
+### Tests
 
 ```bash
-# Predict player outcomes at a course
-python cli.py predict --player scheffler_scottie --course augusta_national
-
-# Get tournament rankings
-python cli.py rank --tournament masters_2024 --courses augusta_national --top 50
-
-# Explain a prediction (SHAP)
-python cli.py explain --player rory_mcilroy --course pebble_beach --top 10
-
-# Show global feature importance
-python cli.py features --top 15
-
-# Update player statistics from PGA Tour / ESPN
-python cli.py update
-
-# Show data info
-python cli.py info
-
-# List API endpoints
-python cli.py api
+pip install pytest
+pytest
 ```
 
-Example CLI output:
+The 11 endpoint tests need the processed CSVs. They replace the prediction services with mocks, so they cover request handling and response shapes, not model output.
 
-```
-======================================================================
-PLAYER OUTCOME PREDICTION
-======================================================================
+## App status
 
-Player:  scheffler_scottie
-Course:  augusta_national
+| Area | Current behavior |
+|------|------------------|
+| `GET /api/data/courses` | **Works:** served from the processed CSV |
+| `GET /api/health`, `/api/health/models` | **Works:** reports model load state |
+| `POST /api/predictions/player-outcome` | **Not working yet:** returns 500 because the outcome models don't load. The service behind it returns random placeholder values |
+| `POST /api/explanations/local` | **Not working yet:** returns 500 on its placeholder SHAP values |
+| `POST /api/rankings/tournament` | **Placeholder:** returns an empty ranking |
+| `GET /api/explanations/feature-importance` | **Placeholder:** fixed values |
+| `GET /api/rankings/player/{id}/course-fits` | **Placeholder:** fixed values |
+| `GET /api/rankings/course/{id}/difficulty` | **Placeholder:** fixed values |
+| `GET /api/data/stats/player/{id}` | **Placeholder:** fixed values |
+| `POST /api/data/update-stats` | **Placeholder:** reports success without fetching data |
+| `GET /api/predictions/historical/{id}` | **Not implemented:** returns an empty list |
+| WebSocket ranking stream | **Untested:** built on the placeholder services, at `/ws/ws/rankings/tournament` |
+| CLI (`cli.py`) | `info`, `api` and `update` run, with placeholder data. `predict`, `rank`, `explain` and `features` show no results because the CLI never loads the models |
 
-Course Fit Score: +0.45 strokes
+The React app has Dashboard, Predictions, Rankings and Explanations pages, and it inherits the behavior above.
 
-Tournament Outcomes:
-  Make Cut:     87.7%
-  Top 10:       35.7%
-  Win:           6.8%
-
-Confidence:   72.0%
-======================================================================
-```
-
-## Features
-
-### Web Dashboard
-
-Four pages served by the React frontend:
-
-| Page | Description |
-|------|-------------|
-| **Dashboard** | API health status, data coverage, top features |
-| **Predictions** | Player outcome prediction with course history (sg_avg, appearances) and probability bars |
-| **Rankings** | Tournament field rankings across one or more courses |
-| **Explanations** | SHAP feature explanations and global feature importance |
-
-### Tournament Outcome Prediction
-
-Predicts three binary outcomes with calibrated probabilities:
-
-| Outcome | Description | Base Rate |
-|---------|-------------|-----------|
-| **Made Cut** | Did player make the cut? | ~58% |
-| **Top-10** | Did player finish top-10? | ~9% |
-| **Win** | Did player win? | ~0.8% |
-
-**Rolling Form Features** (with leakage prevention):
-- `sg_total_last_5` / `sg_total_last_10` - Recent strokes gained averages
-- `sg_*_momentum` - Form trend (improving vs declining)
-- `course_avg_sg` - Historical strokes gained at specific course
-- `rounds_at_course` - Experience at the course
-
-**Leakage Prevention**: Uses `shift(1)` before rolling calculations to ensure the current tournament is never included in its own features.
-
-### Course Fit Prediction
-
-Predicts player-course compatibility using:
-- **Player Skill Profiles**: Driving distance/accuracy, GIR, scrambling, putting
-- **Course Characteristics**: Yardage, fairway width, hazard density, slope rating
-- **Interaction Features**: Accuracy × tight fairways, distance × long courses
-
-## Project Structure
+## Project structure
 
 ```
 pga-analysis/
-├── backend/
-│   └── app/
-│       ├── main.py                    # FastAPI entry point
-│       ├── models.py                  # Pydantic request/response models
-│       ├── config.py                  # App settings
-│       ├── routers/
-│       │   ├── predictions.py         # POST /api/predictions/player-outcome
-│       │   ├── rankings.py            # POST /api/rankings/tournament
-│       │   ├── explanations.py        # POST /api/explanations/local
-│       │   └── data.py                # GET  /api/data/*
-│       ├── services/
-│       │   ├── course_fit.py          # Course fit scoring
-│       │   ├── outcomes.py            # Outcome probability prediction
-│       │   ├── ranking.py             # Tournament ranking engine
-│       │   ├── features.py            # Feature engineering
-│       │   ├── explanations.py        # SHAP explanations
-│       │   ├── data.py                # Data loading
-│       │   └── scraper.py             # PGA Tour / ESPN stats scraper
-│       ├── websockets/
-│       │   └── ranking_stream.py      # WebSocket streaming for live rankings
-│       └── utils/
-│           └── model_loader.py        # Model loading and caching
-├── frontend/
-│   └── src/
-│       ├── pages/
-│       │   ├── Dashboard.tsx
-│       │   ├── Predictions.tsx        # Includes course history display
-│       │   ├── Rankings.tsx
-│       │   └── Explanations.tsx
-│       ├── components/
-│       │   ├── PredictionForm.tsx
-│       │   ├── ProbabilityBar.tsx
-│       │   ├── RankingTable.tsx
-│       │   └── FeatureImportance.tsx
-│       ├── hooks/useApi.ts            # Generic API request hook
-│       └── services/api.ts            # Typed API client
-├── data/
-│   ├── raw/
-│   │   ├── kaggle/                    # PGA Tour 2015-2022 data
-│   │   └── courses/                   # Course characteristics
-│   └── processed/                     # Generated data files
-├── models/                            # Saved model files (.pkl)
-├── tests/
-│   └── test_endpoints.py
-├── cli.py                             # Unified CLI
-├── docker-compose.yml
-├── Dockerfile.backend
-├── Dockerfile.frontend
-├── nginx.conf
-└── requirements.txt
+├── notebooks/
+│   └── course_fit_analysis.py   # The analysis: features, models, SHAP, rankings
+├── backend/app/
+│   ├── main.py                  # FastAPI entry point
+│   ├── routers/                 # API routes
+│   ├── services/                # Prediction, ranking and data services
+│   ├── websockets/              # Ranking stream
+│   └── utils/model_loader.py    # Model cache
+├── frontend/src/                # React + TypeScript dashboard
+├── data/raw/courses/            # Curated course characteristics
+├── tests/test_endpoints.py      # API tests
+├── cli.py                       # Command-line interface
+└── docker-compose.yml           # Backend and frontend containers
 ```
 
-## API Endpoints
+## Data sources
 
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/health` | API health and model status |
-| POST | `/api/predictions/player-outcome` | Predict outcomes for a player at a course |
-| POST | `/api/rankings/tournament` | Rank players for a tournament |
-| GET | `/api/rankings/player/{id}/course-fits` | Player fit across courses |
-| POST | `/api/explanations/local` | SHAP explanation for a prediction |
-| GET | `/api/explanations/feature-importance` | Global feature importance |
-| GET | `/api/data/courses` | List available courses |
-| GET | `/api/data/stats/player/{id}` | Player statistics |
-| POST | `/api/data/update-stats` | Refresh stats from PGA Tour / ESPN |
-| WS | `/ws/rankings/stream` | Live ranking updates via WebSocket |
+- **Results and strokes gained:** [PGA Tour Golf Data 2015-2022](https://www.kaggle.com/datasets/robikscube/pga-tour-golf-data-20152022) on Kaggle.
+- **Course characteristics:** a curated file of 30 courses, committed at `data/raw/courses/course_characteristics.csv`. The notebook uses the 25 that match tournament data.
 
-Interactive docs available at http://localhost:8000/docs when the server is running.
+## Tech stack
 
-## Model Performance
+- **Analysis:** pandas, scikit-learn, XGBoost, LightGBM, SHAP
+- **Backend:** FastAPI, Pydantic, WebSockets
+- **Frontend:** React, TypeScript, Vite, Tailwind CSS
 
-### Outcome Prediction (Test Set)
+## Roadmap
 
-| Outcome | Brier Score | ROC-AUC |
-|---------|-------------|---------|
-| Made Cut | 0.232 | 0.62 |
-| Top-10 | 0.081 | 0.65 |
-| Win | 0.008 | 0.61 |
-
-**Top Predictive Features**:
-1. `sg_total_last_10` - Rolling 10-tournament strokes gained
-2. `course_avg_sg` - Player's history at the course
-3. `sg_total_last_5` - Recent form
-4. `sg_total_momentum` - Improving vs declining trend
-
-### Course Fit Model
-
-- **Test RMSE**: ~0.85 strokes
-- **R² Score**: 0.72+
-
-## Interview Talking Points
-
-1. **Label Leakage Prevention**: "I use `shift(1)` before rolling calculations to ensure the current tournament is never included in its own features."
-
-2. **Probability Calibration**: "Raw classifier probabilities are often poorly calibrated. I use `CalibratedClassifierCV` with isotonic regression to ensure predicted probabilities match actual outcome rates."
-
-3. **Class Imbalance**: "Wins are ~0.7% of outcomes. I use `scale_pos_weight` and evaluate with average precision rather than accuracy."
-
-4. **Temporal Structure**: "Golf tournaments have strong temporal patterns. I always split by date, never randomly, to prevent the model from learning 'future' form."
-
-## Data Sources
-
-- **Training Data**: Kaggle PGA Tour 2015-2022 (strokes gained, tournament results)
-- **Current Stats**: PGA Tour API with ESPN fallback for current season statistics
-- **Course Data**: Curated course characteristics (yardage, fairway width, etc.)
-
-## Dependencies
-
-**Backend**
-- `fastapi`, `uvicorn` - REST API and ASGI server
-- `websockets` - Live ranking streaming
-- `pydantic` - Request/response validation
-- `pandas`, `numpy` - Data manipulation
-- `scikit-learn` - ML preprocessing, calibration, metrics
-- `xgboost`, `lightgbm` - Gradient boosting
-- `shap` - Model explainability
-- `requests` - Web scraping
-
-**Frontend**
-- React + TypeScript + Vite
-- Tailwind CSS
-- Axios
-
-## Future Enhancements
-
-- [ ] Weather feature integration
-- [ ] Betting odds comparison
-- [ ] Historical prediction accuracy tracking
-- [ ] Deploy to Vercel (frontend) + Railway/Render (backend)
+- [ ] Serve the notebook's model through the API in place of the placeholder services
+- [ ] Add a repeatable pipeline to build the data files and models
+- [ ] Extend course coverage and test the course effect on more seasons
+- [ ] Add tests that exercise real model output
+- [ ] Add weather and betting odds comparisons
+- [ ] Finish deployment (`vercel.json` is in place, but `pyproject.toml` lacks the ML dependencies)
 
 ## License
 
 MIT License
 
----
-
-**Author**: Brandon Moeri
-**Version**: 3.0
-**Updated**: June 2026
+**Author:** Brandon Moeri
